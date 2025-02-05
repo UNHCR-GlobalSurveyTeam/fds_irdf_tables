@@ -1,0 +1,767 @@
+---
+title: "Forced Displacement Survey tables"
+author: "Global Survey Team"
+format: html
+editor: source
+number_sections: true
+execute: 
+  echo: true
+  warning: false
+  message: false
+params:
+  country_name: "South Sudan"
+  country_iso: "SSD"
+  region: "East and Horn of Africa and the Great Lakes"
+  survey_year: "2023"
+  ci: true
+  se: true
+  cv: true
+  sdg: true
+  rms: true
+  food: true
+  employment: true
+  shocks: true
+  land: true
+  socialProtection: true
+  legalStatus: true
+  socialEnvironment: true
+  demographics: true
+---
+
+
+
+## Set up
+
+Load packages
+```{r packages}
+library(labelled)
+library(dplyr)
+library(tidyr)
+library(forcats)
+library(stringr)
+library(readr)
+library(readxl)
+library(writexl)
+library(haven)
+library(lubridate)
+library(kableExtra)
+library(fusen)
+library(flextable)
+library(gt)
+library(ggplot2)
+library(srvyr)
+library(purrr)
+library(rlang)
+library(tibble)
+library(officer)
+library(data.table)
+library(furrr)
+```
+
+Import data
+```{r readData}
+# Rename FDS data files that may contain more specific descriptions (e.g. with country name or year) for generic use in code
+rename_df_list <- function(dataframes) {
+  renamed_df_list <- list()
+  for (df in names(dataframes)) {
+    if (grepl("hhmain", tolower(df))) {
+      renamed_df_list[["hhmain"]] <- dataframes[[df]]
+    } else if (grepl("hhroster", tolower(df))) {
+      renamed_df_list[["hhroster"]] <- dataframes[[df]]
+    } else if (grepl("rmember", tolower(df))) {
+      renamed_df_list[["rmember"]] <- dataframes[[df]]
+    } else if (grepl("cgiver", tolower(df))) {
+      renamed_df_list[["cgiver"]] <- dataframes[[df]]
+    } else if (grepl("rwoman", tolower(df))) {
+      renamed_df_list[["rwoman"]] <- dataframes[[df]]
+    #} else if (grepl("allrespondents", tolower(df))) {
+    #  renamed_df_list[["allrespondents"]] <- dataframes[[df]]
+    } else if (grepl("weights", tolower(df))) {
+      renamed_df_list[["weights"]] <- dataframes[[df]]
+    } else {
+      renamed_df_list[[df]] <- dataframes[[df]]
+    }
+  }
+  return(renamed_df_list)
+}
+
+# Import multiple tables at once
+import_df <- function(path = "data", pattern, file, suffix = "") {
+  files <- list.files(path, pattern, full.names = TRUE)
+  files <- setNames(files, files)
+  
+  if (file == ".dta") {
+  list_files <-  map(files, ~ read_dta(.x)) 
+  } else if (file == ".rds") {
+  list_files <- map(files, ~ read_rds(.x))
+  }
+  
+  list_files <- list_files |> rename_df_list()
+  names(list_files) <- paste0(names(list_files), suffix)
+  
+  list_files |>
+    list2env(envir = .GlobalEnv)
+}
+
+import_df(path = "data", pattern = "_design", file = ".rds", suffix = "_design")
+
+# Only keep household members
+hhroster_design <- hhroster_design |>
+  filter(member_calc_2 == " a member")
+
+# Save survey design objects in a list
+designs <- list(hhmain_design, hhroster_design, rmember_design, cgiver_design, rwoman_design)
+
+# Remove some vars from main that should only be calculated in roster
+
+hhmain_design <- hhmain_design |> select(-electricity, -handwashing, -cleanFuel, -cleanCook, -electricity, -basicSanitation, -tenureInd1, -socialProtection, -socialProtectionGov, -socialProtectionNonGovFood, -socialProtectionNonGovNonfood, -socialProtectionNonGovCash)
+```
+
+Specifications
+```{r}
+# Save indicators in a list, by category
+# SDG
+sdg <- c(
+  "union15to18", "unionUnder15", "walkDark",
+  "electricity", "handwashing", "cleanFuel", "tenureInd1",
+  "registeredBirth",
+  "primaryCompletionOpen", "secondaryLowerCompletionOpen", "secondaryUpperCompletionOpen",
+  "preSchool", "account",
+  "mobile", "internet"
+  )
+# RMS
+rms <- c(
+  "identityDocExclRegCard", "cleanCook", "cleanLight", "basicSanitation", 
+  "tenureInd2", "secureShelter", "measlesVaccination", 
+  "primarySecondaryNationalParticipation", "socialProtectionGov"
+)
+# Livelihoods
+livelihoods <- c(
+  "IncSource11","IncSource12","IncSource13","IncSource14",
+  "IncSource15","IncSource16","IncSource17","IncSource18","IncSource19",
+  "multipleInc", "incComb1", "incComb2", "incComb3", "incComb4",
+  "incomeSatisfaction", "incomeHH"
+)
+# Food and nutrition
+food <- c(
+  "FCS_poor", "FCS_borderline", "FCS_adequate",
+  "HFIACombinedCat4", "HFIACombinedCat3", "HFIACombinedCat2", "HFIACombinedCat1",
+  "HHSCombinedCat3", "HHSCombinedCat2", "HHSCombinedCat1",
+  "rCSILessQlty", "rCSIBorrow", "rCSIMealNb", "rCSIMealSize", "rCSIMealAdult",
+  "max_coping"
+)
+# Shocks
+shocks <- c(
+  "shockAny",
+  "shockFlooding", "shockCrop", "shockDeath", "shockIllness", "shockRedEarnings",
+  "shockFinAssistance", "shockPrices", "shockOther",
+  "copingSale", "copingWork", "copingBorrow", "copingSupport", "copingChildren",
+  "copingConsumption", "copingNone"
+)
+# Land
+land <- c(
+  "tenureLandFormalDoc", "tenureLandAnyEvictionUnlikely"
+)
+# Social protection
+socialProtection <- c(
+  "socialProtection", "socialProtectionNonGovFood",
+  "socialProtectionNonGovNonfood", "socialProtectionNonGovCash"
+)
+# Employment
+employment <- c(
+  "JobLegal1", "JobLegal2", "labourForceParticipationRate", "unemploymentRate",
+  "EMP09", "EMP18", "empContract", "agriFish", "agriFishDest", "empSeek", "empWant"
+)
+# Social environment
+socialEnvironment <- c(
+   "moveFree", "moveFree_right",
+   "moveFree_national", "moveFree_abroad",
+   "gbvService", "gbvAttitude"
+)
+# Demographics
+demographics <- c(
+  "HH_02_dup"
+)
+# Health
+health <- c(
+  "mosquitoNet", #"healthcareAccess", "healthcareOOP", 
+  "attendedBirth", "antenatalCare", "pentavalentVaccination"
+)
+# Financial services
+financialServices <- c(
+  "remittances"
+)
+
+# Categories to use are defined in params (set to true). Call those and combine to list
+true_params_ind <- names(params)[sapply(params, isTRUE) & !names(params) %in% c("ci", "se", "cv")]
+
+indicators <- lapply(true_params_ind, get) |> unlist() |> as.list()
+
+# Order of factor levels for disaggregation in table, depending on selected variables.
+disag_order <- c(
+    # Population group
+    "Total", "Refugees", "Refugees South", "Refugees North", "Host community North",
+    # Sex
+    "Men", "Women",
+    "Man as head of household", "Woman as head of household",
+    # Age
+    "0-14", "15-17", "18-24", "25-44", "45-64", "65+",
+    # Disability
+    "Person(s) with disability in household", "No person(s) with disability in household",
+    "WGI Disability Status Identifier 3", "No wGI Disability Status Identifier 3",
+    # Livestock
+    "Livestock", "No livestock"
+    )
+```
+
+Functions
+```{r}
+# Function to calculate weighted proportions, as well as numerator and denominators
+calculate_proportion <- function(design, x, disag0, disag1, disag2, disag3, disag4, vartype, prop_method) {
+  group_vars <- list()
+  
+  if (disag0 != "Total" && disag0 != "") group_vars <- c(group_vars, sym(disag0))
+  if (disag1 != "Total" && disag1 != "") group_vars <- c(group_vars, sym(disag1))
+  if (disag2 != "Total" && disag2 != "") group_vars <- c(group_vars, sym(disag2))
+  if (disag3 != "Total" && disag3 != "") group_vars <- c(group_vars, sym(disag3))
+  if (disag4 != "Total" && disag4 != "") group_vars <- c(group_vars, sym(disag4))
+  group_vars <- c(group_vars, sym(x))
+  
+  result <- tryCatch({
+    design %>%
+      select(!!!group_vars) %>%
+      filter(if_all(everything(), ~!is.na(.))) %>%
+      group_by(!!!group_vars, .drop = TRUE) %>%
+      summarise(
+        n_numerator = unweighted(n()),
+        prop = survey_prop(vartype = vartype, prop_method = prop_method, na.rm = TRUE),
+      ) %>%
+      mutate(n_denominator = sum(n_numerator)) |>
+      ungroup()
+  }, error = function(e) {
+    message("Error in calculate_proportion: ", e$message)
+    return(NULL)
+  })
+  
+  return(result)
+}
+
+
+# Function to generate combinations of disaggregation variables where all other than those related to population groups also include a "Total" category. 
+generate_total_combinations <- function(disag0, disag1, disag2, disag3, disag4) {
+  disags <- list(disag0 = disag0, disag1 = disag1, disag2 = disag2, disag3 = disag3, disag4 = disag4)
+  total_combinations <- list()
+  
+  for (i in 2:5) {
+    for (j in i:5) {
+      if (disags[[i]] != "") {
+        combination <- disags
+        combination[[i]] <- "Total"
+        combination[[j]] <- "Total"
+        total_combinations <- append(total_combinations, list(combination))
+      }
+    }
+  }
+  
+  return(total_combinations)
+}
+
+# Function to calculate the base proportions and totals for a specified variable within a survey design object.
+hlrtable_cat <- function(design, x, disag0 = "", disag1, disag2 = "", disag3 = "", disag4 = "", vartype = c("se", "ci", "cv"), prop_method = "logit") {
+  tbl_x <- calculate_proportion(design, x, disag0, disag1, disag2, disag3, disag4, vartype, prop_method)
+  
+  if (is.null(tbl_x)) {
+    return(NULL)
+  }
+  
+  total_combinations <- generate_total_combinations(disag0, disag1, disag2, disag3, disag4) %>% compact()
+  
+  tbl_x_totals <- map(
+    total_combinations,
+    ~calculate_proportion(design, x, .x$disag0, .x$disag1, .x$disag2, .x$disag3, .x$disag4, vartype, prop_method)
+  ) %>% compact()
+  
+  tbl_x <- bind_rows(tbl_x, tbl_x_totals)
+  
+  select_cols <- c(
+    if(disag0 != "") disag0,
+    if(disag1 != "") disag1,
+    if(disag2 != "") disag2,
+    if(disag3 != "") disag3,
+    if(disag4 != "") disag4
+  )
+  
+  other_cols <- setdiff(names(tbl_x), select_cols)
+  
+  tbl_x <- tbl_x %>%
+    select(all_of(c(select_cols, sort(other_cols)))) %>%
+    arrange(across(all_of(select_cols))) %>%
+    to_factor() %>%
+    rename(ind = !!sym(x))
+  
+  return(tbl_x)
+}
+
+# Function to combine the results of hlrtable_cat for multiple variables. Skips variables that cause errors.
+hlrtable_cat_comb <- function(vars, design, disag0 = "", disag1, disag2 = "", disag3 = "", disag4 = "", vartype = c("se", "ci", "cv"), prop_method = "logit") {
+  dat <- map(
+    vars,
+    function(x) {
+      result <- hlrtable_cat(
+        design = design,
+        x = x,
+        disag0 = disag0,
+        disag1 = disag1,
+        disag2 = disag2,
+        disag3 = disag3,
+        disag4 = disag4,
+        vartype = vartype,
+        prop_method = prop_method
+      )
+      if (is.null(result)) {
+        message("Skipping variable ", x, " due to error.")
+      }
+      return(result)
+    }
+  ) %>% compact()
+  
+  dat <- lapply(dat, as.data.table)
+  
+  dat_combined <- rbindlist(dat, use.names = TRUE, fill = TRUE)
+  
+  return(dat_combined)
+}
+
+# Helper functions to check that variables are present in the data frame
+check_vars <- function(df, vars, ...) {
+  additional_vars <- list(...)
+  vars_present <- all(vars %in% colnames(df))
+  
+  additional_vars_present <- all(sapply(additional_vars, function(var) var %in% colnames(df)))
+  
+  return(vars_present && additional_vars_present)
+}
+
+# Functions to apply hlrtable_cat_comb to the respective survey design object, using specific disaggregation variables. Checks if the necessary variables are present before proceeding, otherwise skipping the indicator.
+disag_hhmain <- function(ind = variables) {
+  if (check_vars(hhmain_design, ind, disag0 = "Intro_07_1", disag1 = "disagGroup", disag2 = "HH_02HHH", disag3 = "ageGroupBroadHHH", disag4 = "disabledPersonHH")) {
+    hlrtable_cat_comb(
+      design = hhmain_design,
+      vars = ind,
+      disag0 = "Intro_07_1",
+      disag1 = "disagGroup",
+      disag2 = "HH_02HHH",
+      disag3 = "ageGroupBroadHHH",
+      disag4 = "disabledPersonHH"
+    )
+  } else {
+    NULL
+  }
+}
+
+disag_hhroster <- function(ind = variables) {
+  if (check_vars(hhroster_design, ind, disag0 = "Intro_07_1", disag1 = "disagGroup", disag2 = "HH_02", disag3 = "ageGroupBroad", disag4 = "disability3")) {
+    hlrtable_cat_comb(
+      design = hhroster_design,
+      vars = ind,
+      disag0 = "Intro_07_1",
+      disag1 = "disagGroup",
+      disag2 = "HH_02",
+      disag3 = "ageGroupBroad",
+      disag4 = "disability3"
+    )
+  } else {
+    NULL
+  }
+}
+
+disag_rmember <- function(ind = variables) {
+  if (check_vars(rmember_design, ind, disag0 = "Intro_07_1", disag1 = "disagGroup", disag2 = "HH_02", disag3 = "ageGroupBroad", disag4 = "disability3")) {
+    hlrtable_cat_comb(
+      design = rmember_design,
+      vars = ind,
+      disag0 = "Intro_07_1",
+      disag1 = "disagGroup",
+      disag2 = "HH_02",
+      disag3 = "ageGroupBroad",
+      disag4 = "disability3"
+    )
+  } else {
+    NULL
+  }
+}
+
+disag_rwoman <- function(ind = variables) {
+  if (check_vars(rwoman_design, ind, disag0 = "Intro_07_1", disag1 = "disagGroup", disag2 = "HH_02", disag3 = "ageGroupBroad", disag4 = "disability3")) {
+    hlrtable_cat_comb(
+      design = rwoman_design,
+      vars = ind,
+      disag0 = "Intro_07_1",
+      disag1 = "disagGroup",
+      disag2 = "HH_02",
+      disag3 = "ageGroupBroad",
+      disag4 = "disability3"
+    )
+  } else {
+    NULL
+  }
+}
+
+disag_cgiver <- function(ind = variables) {
+  if (check_vars(cgiver_design, ind, disag0 = "Intro_07_1", disag1 = "disagGroup", disag2 = "HH_02", disag3 = "ageGroupBroad", disag4 = "disability3")) {
+    hlrtable_cat_comb(
+      design = cgiver_design,
+      vars = ind,
+      disag0 = "Intro_07_1",
+      disag1 = "disagGroup",
+      disag2 = "HH_02",
+      disag3 = "ageGroupBroad",
+      disag4 = "disability3"
+    )
+  } else {
+    NULL
+  }
+}
+
+
+# Set a list of variable names for disaggregation columns. These should be adapted to disaggregation variables in the functions *disag_hhmain*, *disag_hhroster* and *disag_rmember*. This ensures the column names match across tables (e.g. for sex of household head and sex of roster member).
+
+disag_vars <- 
+  list(
+    disag0 = "pop_group1",
+    disag1 = "pop_group2",
+    disag2 = "sex",
+    disag3 = "age",
+    disag4 = "disability"
+  )
+```
+
+# Indicator calculation
+Calculate proportions across specified indicators by survey design object
+```{r}
+# Set up parallel processing
+plan(multisession, workers = parallel::detectCores() - 1)
+
+calculate_disag <- function(indicator, funcs) {
+  future_map(funcs, function(f) f(indicator))
+}
+
+# Save list of functions to apply
+funcs <- list(disag_hhmain, disag_hhroster, disag_rmember, disag_cgiver, disag_rwoman)
+
+# Apply the function to each indicator
+results <- future_map(indicators, calculate_disag, funcs = funcs)
+
+# Extract results by respondent
+hhmain_ind_disag <- map(results, 1)
+hhroster_ind_disag <- map(results, 2)
+rmember_ind_disag <- map(results, 3)
+cgiver_ind_disag <- map(results, 4)
+rwoman_ind_disag <- map(results, 5)
+```
+
+# Processing
+Clean indicator tables
+``` {r}
+# Combine tables
+ind_disag <- c(hhmain_ind_disag, hhroster_ind_disag, rmember_ind_disag, cgiver_ind_disag, rwoman_ind_disag) |> 
+  compact()
+
+# Replace NAs with Total column (TO BE IMPROVED IN ORIGINAL FUN)
+replace_na_with_total <- function(df, disag_order) {
+  df <- df %>%
+    mutate(across(1:5, ~ case_when(is.na(.) ~ "Total", TRUE ~ .))) %>%
+    mutate(across(1:5, ~ factor(., levels = disag_order)))
+  return(df)
+}
+
+ind_disag <- ind_disag |> 
+  map(~ replace_na_with_total(.x, disag_order))
+
+# Rename disaggregation columns using names specified in disag_vars list
+rename_columns <- function(df) {
+  df %>%
+    rename_with(~ case_when(
+      . == "Intro_07_1" ~ disag_vars$disag0,
+      . == "disagGroup" ~ disag_vars$disag1,
+      . %in% c("HH_02", "HH_02HHH") ~ disag_vars$disag2,
+      . %in% c("ageGroupBroad", "ageGroupBroadHHH") ~ disag_vars$disag3,
+      . %in% c("disability3", "disabledPersonHH") ~ disag_vars$disag4,
+      TRUE ~ .  
+    ))
+}
+
+ind_disag <- ind_disag %>% 
+  map(rename_columns)
+
+# Remove unneeded "no" columns and only keep the confidence measures specified in params - MODIFY FOLLOWING CHANGES ABOVE
+combine_disag <- function(df, tables, disag_vars, ci = FALSE, se = FALSE, cv = FALSE) {
+  if (ci == FALSE & se == FALSE & cv == FALSE) {
+    match_cond <- ".*prop$|.*Numerator$|.*mean$|.*median$"
+  } else if (ci == TRUE & se == FALSE & cv == FALSE) {
+    match_cond <- ".*prop$|.*Numerator$|.*mean$|.*median$|.*low$|.*upp$"
+  } else if (ci == FALSE & se == TRUE & cv == FALSE) {
+    match_cond <- ".*prop$|.*Numerator$|.*mean$|.*median$|.*se$"
+  } else if (ci == TRUE & se == TRUE & cv == FALSE) {
+    match_cond <- ".*prop$|.*Numerator$|.*mean$|.*median$|.*low$|.*upp$|.*se$"
+  } else if (ci == TRUE & se == TRUE & cv == TRUE) {
+    match_cond <- ".*prop$|.*Numerator$|.*mean$|.*median$|.*low$|.*upp$|.*se$|.*cv$"
+  } else if (ci == FALSE & se == TRUE & cv == TRUE) {
+    match_cond <- ".*prop$|.*Numerator$|.*mean$|.*median$|.*se$|.*cv$"
+  } else if (ci == TRUE & se == FALSE & cv == TRUE) {
+    match_cond <- ".*prop$|.*Numerator$|.*mean$|.*median$|.*low$|.*upp$|.*cv$"  
+  } else if (ci == FALSE & se == FALSE & cv == TRUE) {
+    match_cond <- ".*prop$|.*Numerator$|.*mean$|.*median$|.*cv$"
+    }
+
+  combined_table <- df |>
+    # mutate(across(
+    #   where(is.numeric),
+    #   ~ case_when(is.na(.) ~ 0, TRUE ~ .)
+    # )) |>
+    as.data.frame() |>
+    select(
+      disag_vars,
+      matches("ind"),
+      matches(match_cond),
+      matches("denominator"),
+      matches("numerator"),
+      -matches("^No "),
+      -matches("^Not "),
+      -matches("^Has not "),
+      -matches("^Do not "),
+      -matches("^Did not ")
+    )
+
+  return(combined_table)
+}
+
+ind_disag <- ind_disag %>%
+  map( ~ combine_disag(
+    df = .,
+    disag_vars = c(
+      disag_vars$disag0,
+      disag_vars$disag1,
+      disag_vars$disag2,
+      disag_vars$disag3,
+      disag_vars$disag4
+    ),
+    ci = params$ci,
+    se = params$se,
+    cv = params$cv
+  )
+  )
+
+filter_rows <- function(df) {
+  df %>%
+    filter(!str_detect(
+      ind, 
+      paste(c("^No ", "^Not ", "^Has not ", "^Do not ", "^Did not ", "^Does not "), 
+            collapse = "|")
+                       )
+           )
+}
+
+# Apply the filtering function to each data frame in the list
+ind_disag1 <- map(ind_disag, filter_rows)
+
+# Function to filter out rows with NA values
+filter_na_rows <- function(df) {
+  df <- df %>%
+    filter(across(everything(), ~ !is.na(.)))
+  return(df)
+}
+
+ind_disag <- ind_disag |>
+  map(filter_na_rows)
+
+# Function to fill NA denominators within a single dataframe
+fill_denominators <- function(df) {
+  # Find all columns ending with "_denominator"
+  denominator_cols <- grep("_denominator$", names(df), value = TRUE)
+  
+  if (length(denominator_cols) < 2) {
+    return(df)  # Return unchanged if less than 2 denominator columns
+  }
+  
+  # For each denominator column ff there are NA values, get other denominator values
+  for (col in denominator_cols) {
+    if (any(is.na(df[[col]]))) {
+      other_denom_cols <- setdiff(denominator_cols, col)
+      for (row in which(is.na(df[[col]]))) {
+        for (other_col in other_denom_cols) {
+          if (!is.na(df[row, other_col])) {
+            df[row, col] <- df[row, other_col]
+            break  
+          }
+        }
+      }
+    }
+  }
+  
+  return(df)
+}
+
+# Function to replace NAs with 0 in a single dataframe
+replace_nas_with_zero <- function(df) {
+  df[is.na(df)] <- 0
+  return(df)
+}
+
+ind_disag <- lapply(ind_disag, fill_denominators)
+ind_disag <- lapply(ind_disag, replace_nas_with_zero)
+```
+
+Prepare single table
+```{r}
+# Combine tables to one dataframe
+ind_disag <- bind_rows(ind_disag)
+
+# Function to extract labels
+extract_labels <- function(df, indicators_vec) {
+
+var_labels <- sapply(indicators_vec, function(x) var_label(df$variables[[x]])) |>
+  enframe() |>
+  mutate(value = map2(name, value, ~ tibble(name = .x, sub_name = names(.y), value = .y))) |>
+  mutate(ind_name = indicators) |>
+  unnest() |>
+  select(-name1) 
+}
+
+ind_lbl <- map_dfr(designs, ~ extract_labels(.x, indicators)) |>
+  filter(!is.na(value))
+
+# Merge with labels
+ind_disag_lbl <- merge(ind_disag,
+                       ind_lbl,
+                       by.x = "ind",
+                       by.y = "value",
+                       all = T)
+
+# Move disag on disability in household to separate column if disaggregating by disability
+if ("disability" %in% names(ind_disag_lbl)) {
+  ind_disag_lbl <- ind_disag_lbl %>%
+    mutate(
+      disag_other = case_when(
+        str_detect(disability, "disability in household") ~ to_factor(disability),
+        TRUE ~ NA
+      ),
+      disability = case_when(
+        !is.na(disag_other) ~ NA,
+        TRUE ~ disability
+      )
+    )
+}
+
+# Create new column for sub-indicators
+shock_vars <- c("shockAny", "shockDeath", "shockFinAssistance", "shockFlooding", "shockOther", "shockRedEarnings", "shockIllness", "shockCrop", "shockPrices")
+coping_vars <-  c("copingSale", "copingWork", "copingBorrow", "copingSupport", "copingChildren", "copingConsumption", "copingNone")
+fcs_vars <- c("FCS_poor", "FCS_borderline", "FCS_adequate")
+hfias_vars <- c("HFIACombinedCat4", "HFIACombinedCat3", "HFIACombinedCat2", "HFIACombinedCat1")
+hhs_vars <- c("HHSCombinedCat3", "HHSCombinedCat2", "HHSCombinedCat1")
+rCSI_vars <- c("rCSILessQlty", "rCSIBorrow", "rCSIMealNb", "rCSIMealSize", "rCSIMealAdult")
+
+ind_disag_lbl <- ind_disag_lbl %>%
+  mutate(
+    `sub_ind_name` = case_when(
+      ind_name %in% c(shock_vars, fcs_vars, hfias_vars, hhs_vars, rCSI_vars) ~ ind,
+      TRUE ~ NA_character_
+    ),
+    ind = case_when(
+      ind_name %in% shock_vars ~ "Proportion of the population that experienced household shocks in the previous 12 months, by type of shock",
+      ind_name %in% coping_vars ~ "Proportion of the population that experienced household shocks and used a coping strategy in the previous 12 months, by coping strategy",
+      ind_name %in% fcs_vars ~ "Proportion of households by Food Consumption Score category",
+      ind_name %in% hfias_vars ~ "Proportion of households by Household Food Insecurity Access Scale category",
+      ind_name %in% hhs_vars ~ "Proportion of households by Household Hunger Scale category",
+      ind_name %in% rCSI_vars ~ "Proportion of households by Reduced Coping Strategy Index category",
+      TRUE ~ ind
+    )
+  )
+```
+
+Prepare reordered and clean table
+```{r}
+ind_tbl <- ind_disag_lbl |>
+  filter(n_denominator > 0) |>
+  mutate(across(contains("prop"), ~ round(.x * 100, 2))) |>
+  mutate(ind_name = factor(ind_name, levels = unlist(indicators))) |>
+  mutate(across(
+    c(
+      disag_vars$disag0,
+      disag_vars$disag1,
+      disag_vars$disag2,
+      disag_vars$disag3,
+      disag_vars$disag4
+    ),
+    ~ factor(.x, levels = disag_order)
+  )) |>
+  arrange(across(
+    c(
+      ind,
+      disag_vars$disag0,
+      disag_vars$disag1,
+      disag_vars$disag2,
+      disag_vars$disag3,
+      disag_vars$disag4
+    )
+  )) |>
+  mutate(`_` = "") |>
+  select(
+    ind_name,
+    id_name = ind,
+    sub_id_name = sub_ind_name,
+    pop_group_1 = disag_vars$disag0,
+    pop_group_2 = disag_vars$disag1,
+    disag_vars$disag2,
+    disag_vars$disag3,
+    disag_vars$disag4,
+    disag_other,
+    ref_group_size = n_denominator,
+    `_`,
+    num_obs = n_numerator,
+    obs_value = prop,
+    lower_bound = prop_low,
+    upper_bound = prop_upp,
+    cv = prop_cv
+  )
+
+# Manually fix some incorrect labeling and remove unneeded rows FIX THIS FURTHER UP
+ind_tbl <- ind_tbl |>
+  mutate(ind_name = case_when(id_name == "Unemployment rate" ~ "unemploymentRate", TRUE ~ ind_name),
+         ind_name = case_when(id_name == "Access to land (disag)" ~ "landAccess", TRUE ~ ind_name),
+         id_name = case_when(id_name == "landAccess" ~ "Access to land", TRUE ~ id_name)) |>
+  filter(!is.na(ind_name), ind_name != "landAccess",
+             !(pop_group_1 == "Host community North" & pop_group_2 == "Host community North"))
+
+# Add additional columns with survey information
+ind_tbl <- ind_tbl |>
+  mutate(
+    compiling_org = "UNHCR",
+    ref_area_region = params$region,
+    ref_area_adm0 = params$country_iso,
+    ref_area_adm1 = NA,
+    ref_area_site = NA,
+    deg_urb = "_T",
+    camp_setting = "_T",
+    time_period = params$survey_year,
+    ori_area_adm0 = NA,
+    nationality = NA,
+    pop_group_sub = NA,
+    computation_type = "E",
+    num_obs_potential = NA,
+    num_val = NA,
+    den_val = NA,
+    conf_int = NA,
+    footnotes = NA
+  ) %>%
+  mutate(ind_name = factor(ind_name, levels = indicators)) %>%
+  arrange(ind_name)
+```
+
+# Save
+```{r}
+# File name of .xlsx defined by values in params: country iso, year, indicator categories
+write_xlsx(ind_tbl, 
+           paste0("data/processed/FDS", params$country_iso, "_", params$survey_year, "_", paste(true_params_ind, collapse = "_"), ".xlsx"))
+```
+
